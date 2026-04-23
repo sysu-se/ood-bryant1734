@@ -16,6 +16,19 @@ describe('HW1 serialization / deserialization', () => {
     expect(typeof restored.toString()).toBe('string')
   })
 
+  it('preserves given cells across sudoku serialization', async () => {
+    const { createSudoku, createSudokuFromJSON } = await loadDomainApi()
+
+    const sudoku = createSudoku(makePuzzle())
+    const restored = createSudokuFromJSON(
+      JSON.parse(JSON.stringify(sudoku.toJSON())),
+    )
+
+    expect(restored.isGiven({ row: 0, col: 0 })).toBe(true)
+    expect(restored.guess({ row: 0, col: 0, value: 9 })).toBe(false)
+    expect(restored.getGrid()[0][0]).toBe(5)
+  })
+
   it('supports game round-trip serialization for the current board state', async () => {
     const { createGame, createGameFromJSON, createSudoku } = await loadDomainApi()
 

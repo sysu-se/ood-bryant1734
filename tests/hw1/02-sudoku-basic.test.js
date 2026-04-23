@@ -24,6 +24,16 @@ describe('HW1 sudoku basic behavior', () => {
     expect(grid[0][2]).toBe(4)
   })
 
+  it('does not allow guesses to overwrite given puzzle cells', async () => {
+    const { createSudoku } = await loadDomainApi()
+    const sudoku = createSudoku(makePuzzle())
+
+    expect(sudoku.isGiven({ row: 0, col: 0 })).toBe(true)
+    expect(sudoku.isEditable({ row: 0, col: 0 })).toBe(false)
+    expect(sudoku.guess({ row: 0, col: 0, value: 9 })).toBe(false)
+    expect(sudoku.getGrid()[0][0]).toBe(5)
+  })
+
   it('getGrid returns a 9x9 numeric grid', async () => {
     const { createSudoku } = await loadDomainApi()
     const sudoku = createSudoku(makePuzzle())

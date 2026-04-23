@@ -6,7 +6,15 @@ function createEmptyGrid() {
 	return Array.from({ length: SUDOKU_SIZE }, () => Array(SUDOKU_SIZE).fill(0));
 }
 
+function createEmptyBooleanGrid(value = false) {
+	return Array.from({ length: SUDOKU_SIZE }, () => Array(SUDOKU_SIZE).fill(value));
+}
+
 function cloneGrid(grid) {
+	return grid.map((row) => row.slice());
+}
+
+function cloneBooleanGrid(grid) {
 	return grid.map((row) => row.slice());
 }
 
@@ -30,6 +38,10 @@ function cloneCandidateEntries(entries) {
 		...entry,
 		candidates: entry.candidates.slice(),
 	}));
+}
+
+function cloneEditablePositions(positions) {
+	return positions.map(({ row, col }) => ({ row, col }));
 }
 
 function assertGrid9x9(grid, source = 'grid') {
@@ -57,6 +69,37 @@ function normalizeGrid(input) {
 	return cloneGrid(grid);
 }
 
+function assertBooleanGrid9x9(grid, source = 'givens') {
+	if (!Array.isArray(grid) || grid.length !== SUDOKU_SIZE) {
+		throw new TypeError(`${source} must be a 9x9 boolean matrix`);
+	}
+
+	for (let row = 0; row < SUDOKU_SIZE; row++) {
+		if (!Array.isArray(grid[row]) || grid[row].length !== SUDOKU_SIZE) {
+			throw new TypeError(`${source} must be a 9x9 boolean matrix`);
+		}
+
+		for (let col = 0; col < SUDOKU_SIZE; col++) {
+			if (typeof grid[row][col] !== 'boolean') {
+				throw new TypeError(`${source}[${row}][${col}] must be a boolean`);
+			}
+		}
+	}
+}
+
+function createGivenGridFromGrid(grid) {
+	return grid.map((row) => row.map((cell) => cell !== 0));
+}
+
+function normalizeGivens(givens, grid) {
+	if (givens === undefined) {
+		return createGivenGridFromGrid(grid);
+	}
+
+	assertBooleanGrid9x9(givens, 'givens');
+	return cloneBooleanGrid(givens);
+}
+
 function normalizeMove(move) {
 	if (!move || typeof move !== 'object') {
 		throw new TypeError('move must be an object');
@@ -76,6 +119,22 @@ function normalizeMove(move) {
 	}
 
 	return { row, col, value: normalizedValue };
+}
+
+function normalizePosition(pos, source = 'position') {
+	if (!pos || typeof pos !== 'object') {
+		throw new TypeError(`${source} must be an object`);
+	}
+
+	const { row, col } = pos;
+	if (!Number.isInteger(row) || row < 0 || row >= SUDOKU_SIZE) {
+		throw new RangeError(`${source}.row must be an integer in [0, 8]`);
+	}
+	if (!Number.isInteger(col) || col < 0 || col >= SUDOKU_SIZE) {
+		throw new RangeError(`${source}.col must be an integer in [0, 8]`);
+	}
+
+	return { row, col };
 }
 
 function formatSudoku(grid) {
@@ -277,18 +336,91 @@ function analyzeGrid(grid) {
 	const complete = grid.every((row) => row.every((cell) => cell !== 0));
 	const deadEnd = candidates.some((entry) => entry.candidates.length === 0);
 	const solved = complete && invalidPositions.length === 0;
+	const noSolution = invalidPositions.length > 0 || deadEnd || !hasAnySolution(grid);
 
 	return {
 		invalidPositions,
 		candidates,
 		complete,
 		deadEnd,
+		noSolution,
 		solved,
 	};
 }
 
 function boardKey(grid) {
 	return grid.flat().join(',');
+}
+
+function gridFromBoardKey(key) {
+	const values = key.split(',').map(Number);
+	if (values.length !== SUDOKU_SIZE * SUDOKU_SIZE || values.some((value) => !Number.isInteger(value))) {
+		return null;
+	}
+
+	const grid = createEmptyGrid();
+	for (let index = 0; index < values.length; index++) {
+		const value = values[index];
+		if (value < 0 || value > SUDOKU_SIZE) {
+			return null;
+		}
+
+		grid[Math.floor(index / SUDOKU_SIZE)][index % SUDOKU_SIZE] = value;
+	}
+
+	return grid;
+}
+
+function includesFailedBoard(currentGrid, failedGrid) {
+	for (let row = 0; row < SUDOKU_SIZE; row++) {
+		for (let col = 0; col < SUDOKU_SIZE; col++) {
+			const failedValue = failedGrid[row][col];
+			if (failedValue !== 0 && currentGrid[row][col] !== failedValue) {
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+function hasAnySolution(grid) {
+	if (collectInvalidPositions(grid).length > 0) {
+		return false;
+	}
+
+	const workingGrid = cloneGrid(grid);
+
+	function solve() {
+		let bestEntry = null;
+
+		for (const entry of collectCandidateEntries(workingGrid)) {
+			if (entry.candidates.length === 0) {
+				return false;
+			}
+
+			if (!bestEntry || entry.candidates.length < bestEntry.candidates.length) {
+				bestEntry = entry;
+			}
+		}
+
+		if (!bestEntry) {
+			return true;
+		}
+
+		for (const candidate of bestEntry.candidates) {
+			workingGrid[bestEntry.row][bestEntry.col] = candidate;
+
+			if (solve()) {
+				return true;
+			}
+		}
+
+		workingGrid[bestEntry.row][bestEntry.col] = 0;
+		return false;
+	}
+
+	return solve();
 }
 
 function normalizeSnapshot(snapshot, source = 'snapshot') {
@@ -338,33 +470,33 @@ function normalizeExploreStack(explore, source = 'explore') {
 
 function createTimelineState({ sudoku, undoStack = [], redoStack = [] }) {
 	let timeline = [
-		...undoStack.map((snapshot, index) => normalizeSnapshot(snapshot, `undoStack[${index}]`)),
-		normalizeSnapshot(sudoku.toJSON(), 'sudoku'),
-		...redoStack.map((snapshot, index) => normalizeSnapshot(snapshot, `redoStack[${index}]`)),
+		...undoStack.map((snapshot, index) => createSudokuFromJSON(normalizeSnapshot(snapshot, `undoStack[${index}]`))),
+		sudoku.clone(),
+		...redoStack.map((snapshot, index) => createSudokuFromJSON(normalizeSnapshot(snapshot, `redoStack[${index}]`))),
 	];
 	let cursor = undoStack.length;
 
 	return {
 		getCurrentSnapshot() {
-			return timeline[cursor];
+			return timeline[cursor].toJSON();
 		},
 
 		getCurrentSudoku() {
-			return createSudokuFromJSON(timeline[cursor]);
+			return timeline[cursor];
 		},
 
 		getUndoSnapshots() {
-			return timeline.slice(0, cursor);
+			return timeline.slice(0, cursor).map((entry) => entry.toJSON());
 		},
 
 		getRedoSnapshots() {
-			return timeline.slice(cursor + 1);
+			return timeline.slice(cursor + 1).map((entry) => entry.toJSON());
 		},
 
 		push(nextSudoku) {
 			timeline = [
 				...timeline.slice(0, cursor + 1),
-				nextSudoku.toJSON(),
+				nextSudoku.clone(),
 			];
 			cursor += 1;
 		},
@@ -419,41 +551,59 @@ function serializeExploreSession(session) {
 	};
 }
 
-export function createSudoku(input) {
+export function createSudoku(input, options = {}) {
 	let grid = normalizeGrid(input);
+	const givens = normalizeGivens(options.givens, grid);
 
 	return {
 		getGrid() {
 			return cloneGrid(grid);
 		},
 
+		getGivens() {
+			return cloneBooleanGrid(givens);
+		},
+
+		isGiven(pos) {
+			const { row, col } = normalizePosition(pos);
+			return givens[row][col];
+		},
+
+		isEditable(pos) {
+			return !this.isGiven(pos);
+		},
+
+		getEditablePositions() {
+			const positions = [];
+			for (let row = 0; row < SUDOKU_SIZE; row++) {
+				for (let col = 0; col < SUDOKU_SIZE; col++) {
+					if (!givens[row][col]) {
+						positions.push({ row, col });
+					}
+				}
+			}
+
+			return positions;
+		},
+
 		guess(move) {
 			const { row, col, value } = normalizeMove(move);
+			if (givens[row][col]) {
+				return false;
+			}
+
 			grid[row][col] = value;
+			return true;
 		},
 
 		getCandidates(pos) {
-			if (!pos || typeof pos !== 'object') {
-				throw new TypeError('position must be an object');
-			}
-
-			const { row, col } = pos;
-			if (!Number.isInteger(row) || row < 0 || row >= SUDOKU_SIZE) {
-				throw new RangeError('position.row must be an integer in [0, 8]');
-			}
-			if (!Number.isInteger(col) || col < 0 || col >= SUDOKU_SIZE) {
-				throw new RangeError('position.col must be an integer in [0, 8]');
-			}
+			const { row, col } = normalizePosition(pos);
 
 			return getCandidatesForGrid(grid, row, col);
 		},
 
 		getCandidateHint(pos) {
-			if (!pos || typeof pos !== 'object') {
-				throw new TypeError('position must be an object');
-			}
-
-			const { row, col } = pos;
+			const { row, col } = normalizePosition(pos);
 			return {
 				row,
 				col,
@@ -482,12 +632,13 @@ export function createSudoku(input) {
 		},
 
 		clone() {
-			return createSudoku(grid);
+			return createSudoku(grid, { givens });
 		},
 
 		toJSON() {
 			return {
 				grid: cloneGrid(grid),
+				givens: cloneBooleanGrid(givens),
 			};
 		},
 
@@ -502,7 +653,7 @@ export function createSudokuFromJSON(json) {
 		throw new TypeError('sudoku json must be an object');
 	}
 
-	return createSudoku(json.grid);
+	return createSudoku(json.grid, { givens: json.givens });
 }
 
 function createGameWithState({ sudoku, undoStack = [], redoStack = [], explore = null }) {
@@ -536,13 +687,33 @@ function createGameWithState({ sudoku, undoStack = [], redoStack = [], explore =
 		return exploreStack.length;
 	}
 
+	function matchesKnownFailedBoard(grid) {
+		if (!isExploring()) {
+			return false;
+		}
+
+		const key = boardKey(grid);
+		if (failedBoards.has(key)) {
+			return true;
+		}
+
+		for (const failedKey of failedBoards) {
+			const failedGrid = gridFromBoardKey(failedKey);
+			if (failedGrid && includesFailedBoard(grid, failedGrid)) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 	function evaluateCurrentBoard() {
 		const currentSudoku = getCurrentSudoku();
 		const grid = currentSudoku.getGrid();
 		const analysis = analyzeGrid(grid);
 		const key = boardKey(grid);
-		const knownFailed = isExploring() && failedBoards.has(key);
-		const failed = knownFailed || analysis.invalidPositions.length > 0 || analysis.deadEnd;
+		const knownFailed = matchesKnownFailedBoard(grid);
+		const failed = knownFailed || analysis.noSolution;
 
 		if (isExploring() && failed) {
 			failedBoards.add(key);
@@ -564,10 +735,13 @@ function createGameWithState({ sudoku, undoStack = [], redoStack = [], explore =
 
 	function buildSnapshot() {
 		const currentState = getActiveState();
+		const currentSudoku = getCurrentSudoku();
 		const evaluation = evaluateCurrentBoard();
 
 		return {
 			grid: cloneGrid(evaluation.grid),
+			givens: currentSudoku.getGivens(),
+			editablePositions: cloneEditablePositions(currentSudoku.getEditablePositions()),
 			invalidPositions: cloneInvalidPositions(evaluation.analysis.invalidPositions),
 			complete: evaluation.analysis.complete,
 			won: evaluation.analysis.solved,
@@ -586,7 +760,7 @@ function createGameWithState({ sudoku, undoStack = [], redoStack = [], explore =
 
 	return {
 		getSudoku() {
-			return getCurrentSudoku();
+			return getCurrentSudoku().clone();
 		},
 
 		getCandidates(pos) {
@@ -605,18 +779,27 @@ function createGameWithState({ sudoku, undoStack = [], redoStack = [], explore =
 			return getCurrentSudoku().getNextHint(level);
 		},
 
+		isEditable(pos) {
+			return getCurrentSudoku().isEditable(pos);
+		},
+
 		guess(move) {
 			const { row, col, value } = normalizeMove(move);
 			const currentSudoku = getCurrentSudoku();
 			const currentGrid = currentSudoku.getGrid();
 
 			if (currentGrid[row][col] === value) {
-				return;
+				return false;
 			}
 
-			currentSudoku.guess({ row, col, value });
-			getActiveState().push(currentSudoku);
+			const nextSudoku = currentSudoku.clone();
+			if (!nextSudoku.guess({ row, col, value })) {
+				return false;
+			}
+
+			getActiveState().push(nextSudoku);
 			evaluateCurrentBoard();
+			return true;
 		},
 
 		undo() {

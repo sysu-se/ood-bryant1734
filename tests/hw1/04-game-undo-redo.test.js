@@ -50,4 +50,13 @@ describe('HW1 game undo / redo', () => {
     expect(game.canRedo()).toBe(false)
     expect(game.getSudoku().getGrid()[2][0]).toBe(1)
   })
+
+  it('does not record an undo step when a given cell edit is rejected', async () => {
+    const { createGame, createSudoku } = await loadDomainApi()
+    const game = createGame({ sudoku: createSudoku(makePuzzle()) })
+
+    expect(game.guess({ row: 0, col: 0, value: 9 })).toBe(false)
+    expect(game.getSudoku().getGrid()[0][0]).toBe(5)
+    expect(game.canUndo()).toBe(false)
+  })
 })

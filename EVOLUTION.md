@@ -33,6 +33,15 @@
 - `discardExplore()`：直接丢弃当前 explore timeline，回到上一层 explore 或主局面；
 - `commitExplore()`：把当前 explore 的最终局面作为一个新快照提交到上一层 explore 或主 history。
 
+探索失败由领域层自动判断，而不是 UI 临时猜测：
+- 如果 `Sudoku.validate()` 发现行、列或 3x3 宫内有重复数字，就认为当前探索冲突；
+- 如果存在空格没有任何候选数，就认为当前探索已经走进死胡同；
+- 如果局面没有显式冲突，但回溯求解器已经找不到任何完整解，也认为该探索路径无解。
+
+`Game.getSnapshot()` 会把这些结果暴露成 `exploreFailed`、`knownFailed` 和 `canCommitExplore`。失败时禁止 `commitExplore()`，用户只能 undo 或 discard/backtrack。
+
+为了满足“用户多路径探索到已经失败的探索路径的某一棋盘时，告知用户探索失败”，`Game` 还维护了 `failedBoards` 黑名单。每次 explore 中证明某个棋盘失败时，会用棋盘快照哈希记录下来；之后用户通过另一条路径到达同一个失败局面，或者到达一个包含该失败局面全部试填信息的后续局面，`knownFailed` 会立即变成 `true`。这个黑名单会随 `Game.toJSON()` 序列化，并在 `createGameFromJSON()` 中恢复。
+
 ## 4. 主局面与探索局面的关系是什么？
 
 主局面与探索局面不是共享同一个可变对象，而是基于快照复制出的多个会话层次。
@@ -52,6 +61,8 @@
 - 加分项中，explore 进一步支持栈式嵌套分支，因此整体 history 从“单一线性栈”扩展成“主线性 history + explore 分支栈”；
 - 但仍然没有引入 DAG 合并，避免复杂度过高。
 
+Undo/Redo 的兼容性原则是：普通状态下 `undo()` / `redo()` 只操作主 timeline；explore 状态下只操作当前最深层 explore timeline。`commitExplore()` 会把 explore 的最终快照作为一次普通新操作压入父 timeline，并清空父 timeline 当前位置之后的 redo 分支；`discardExplore()` 只销毁当前 explore session，不会把临时试填写回主局面。这样既保留 Homework 1 的线性 Undo/Redo 行为，又能在 explore 分支内独立撤销和重做。
+
 ## 6. Homework 1 中的哪些设计，在 Homework 2 中暴露出了局限？
 
 Homework 1 的局限主要有两点：
@@ -69,3 +80,7 @@ Homework 1 的局限主要有两点：
 - `Game` 负责会话、history、状态切换和分支。
 
 同时我会更早把 timeline 抽象成可复用的内部结构，这样 Homework 2 在加入 explore 时就不需要从线性 history 再向外扩展一次，而可以更自然地复用同一套快照机制。
+
+根据 Homework 1 的 review，我也把“题面 givens 不可修改”从 Svelte 适配层收回到了领域对象中。现在 `Sudoku` 会保存初始 givens，`Sudoku.guess()` / `Game.guess()` 都会拒绝覆盖 givens；`Game.getSnapshot()` 会导出 `givens` 和 `editablePositions`，Board 与 Keyboard 再根据这个领域快照判断样式和输入可用性，而不是直接用旧 `grid` store 当第二份真相源。
+
+同时，`Game` 的 timeline 内部从“只保存 JSON”调整为“保存 `Sudoku` 克隆对象，对外序列化时再输出 JSON”。这样仍保留快照式 undo/redo 的简单语义，但当前局面不再每次通过 JSON 反序列化重建，`Game` 更像一个稳定管理 `Sudoku` 聚合的会话对象。
